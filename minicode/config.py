@@ -125,6 +125,14 @@ class WorktreeConfig:
 
 
 @dataclass
+class SandboxAppConfig:
+    """沙箱相关的配置项。"""
+    enabled: bool = False         # 是否启用 OS 级沙箱
+    auto_allow: bool = False      # 是否自动放行命令（沙箱兜底）
+    network_enabled: bool = False  # 沙箱内是否允许网络访问
+
+
+@dataclass
 class AppConfig:
     providers: list[ProviderConfig]
     permission_mode: str = "default"
@@ -135,6 +143,7 @@ class AppConfig:
     worktree: WorktreeConfig = field(default_factory=WorktreeConfig)
     teammate_mode: str = ""
     enable_coordinator_mode: bool = False
+    sandbox: SandboxAppConfig = field(default_factory=SandboxAppConfig)
 
 
 def _load_single_file(path: Path) -> AppConfig:
@@ -178,6 +187,13 @@ def _load_single_file(path: Path) -> AppConfig:
         stale_cutoff_hours=wt["stale_cutoff_hours"],
     )
 
+    sb = validated["sandbox"]
+    sandbox_cfg = SandboxAppConfig(
+        enabled=sb["enabled"],
+        auto_allow=sb["auto_allow"],
+        network_enabled=sb["network_enabled"],
+    )
+
     return AppConfig(
         providers=providers,
         permission_mode=validated["permission_mode"],
@@ -188,6 +204,7 @@ def _load_single_file(path: Path) -> AppConfig:
         worktree=worktree_cfg,
         teammate_mode=validated["teammate_mode"],
         enable_coordinator_mode=validated["enable_coordinator_mode"],
+        sandbox=sandbox_cfg,
     )
 
 
@@ -215,6 +232,13 @@ def _merge_config(base: AppConfig, override: AppConfig) -> AppConfig:
         base.teammate_mode = override.teammate_mode
     if override.enable_coordinator_mode:
         base.enable_coordinator_mode = True
+    # 沙箱配置：后层覆盖前层（任一字段为非默认值即覆盖）
+    if override.sandbox.enabled:
+        base.sandbox.enabled = True
+    if override.sandbox.auto_allow:
+        base.sandbox.auto_allow = True
+    if override.sandbox.network_enabled:
+        base.sandbox.network_enabled = True
     return base
 
 

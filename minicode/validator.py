@@ -217,13 +217,38 @@ def validate_teammate_mode(mode: object) -> str:
     return mode
 
 
+def validate_sandbox(raw_sb: dict | None) -> dict:
+    """校验 sandbox 配置段，返回清洗后的配置字典。"""
+    defaults = {
+        "enabled": False,
+        "auto_allow": False,
+        "network_enabled": False,
+    }
+
+    if raw_sb is None:
+        return defaults
+
+    if not isinstance(raw_sb, dict):
+        raise ConfigError("'sandbox' must be a mapping")
+
+    result = dict(defaults)
+    for key in ("enabled", "auto_allow", "network_enabled"):
+        if key in raw_sb:
+            val = raw_sb[key]
+            if not isinstance(val, bool):
+                raise ConfigError(f"'sandbox.{key}' must be a boolean")
+            result[key] = val
+
+    return result
+
+
 def validate_config_structure(raw: object) -> dict:
     """校验的主入口。校验解析后的原始配置，返回清洗后的字典。
 
     返回的字典包含以下键：
         providers、permission_mode、mcp_servers、hooks、
         enable_fork、enable_verification_agent、worktree、
-        teammate_mode、enable_coordinator_mode
+        teammate_mode、enable_coordinator_mode、sandbox
     """
     if not isinstance(raw, dict) or "providers" not in raw:
         raise ConfigError("Config must contain a 'providers' list")
@@ -244,4 +269,5 @@ def validate_config_structure(raw: object) -> dict:
             raw.get("enable_coordinator_mode",
                     False), "enable_coordinator_mode"
         ),
+        "sandbox": validate_sandbox(raw.get("sandbox")),
     }

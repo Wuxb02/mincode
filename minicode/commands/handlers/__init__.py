@@ -9,6 +9,7 @@ from minicode.commands.handlers.permission import PERMISSION_COMMAND
 from minicode.commands.handlers.plan import PLAN_COMMAND
 from minicode.commands.handlers.session import SESSION_COMMAND
 from minicode.commands.handlers.skill import SKILL_COMMAND
+from minicode.commands.handlers.sandbox import SANDBOX_COMMAND
 from minicode.commands.handlers.rewind import REWIND_COMMAND
 from minicode.commands.handlers.status import STATUS_COMMAND
 from minicode.commands.registry import CommandRegistry
@@ -26,6 +27,7 @@ ALL_COMMANDS = [
     REWIND_COMMAND,
     STATUS_COMMAND,
     SKILL_COMMAND,
+    SANDBOX_COMMAND,
 ]
 
 

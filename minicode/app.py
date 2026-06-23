@@ -640,6 +640,7 @@ class minicodeApp(App):
         teammate_mode: str = "",
         enable_coordinator_mode: bool = False,
         driver_class: type | None = None,
+        sandbox_config: Any = None,
     ) -> None:
         super().__init__(driver_class=driver_class)
         self.providers = providers
@@ -651,6 +652,8 @@ class minicodeApp(App):
         self._worktree_config = worktree_config
         self._teammate_mode = teammate_mode
         self._enable_coordinator_mode = enable_coordinator_mode
+        from minicode.config import SandboxAppConfig
+        self._sandbox_cfg: SandboxAppConfig = sandbox_config or SandboxAppConfig()
         self.file_cache = FileCache()
         self.client: LLMClient | None = None
         self.conversation = ConversationManager()
@@ -755,6 +758,11 @@ class minicodeApp(App):
 
         work_dir = os.getcwd()
         home = Path.home()
+
+        # 根据配置决定是否启用 OS 级沙箱自动放行
+        sandbox_auto_allow = (
+            self._sandbox_cfg.enabled and self._sandbox_cfg.auto_allow
+        )
         checker = PermissionChecker(
             detector=DangerousCommandDetector(),
             sandbox=PathSandbox(work_dir),
@@ -766,7 +774,26 @@ class minicodeApp(App):
                 ".minicode" / "permissions.local.yaml",
             ),
             mode=self._initial_permission_mode,
+            sandbox_enabled=sandbox_auto_allow,
         )
+
+        # 如果配置启用了沙箱，为 Bash 工具挂载 OS 沙箱
+        if self._sandbox_cfg.enabled:
+            from minicode.sandbox import SandboxConfig, create_sandbox
+            os_sandbox = create_sandbox()
+            if os_sandbox and os_sandbox.available():
+                sandbox_config = SandboxConfig(
+                    allow_write=[work_dir, "/tmp"],
+                    deny_write=[
+                        f"{work_dir}/.minicode/config.yaml",
+                        f"{work_dir}/.minicode/permissions.local.yaml",
+                    ],
+                    network_enabled=self._sandbox_cfg.network_enabled,
+                )
+                bash_tool = self.registry.get("Bash")
+                if bash_tool:
+                    bash_tool.sandbox = os_sandbox
+                    bash_tool.sandbox_config = sandbox_config
 
         self._instructions_content = load_instructions(work_dir)
         self.memory_manager = MemoryManager(work_dir)

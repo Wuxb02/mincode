@@ -101,6 +101,7 @@ def main() -> None:
         teammate_mode=config.teammate_mode,
         enable_coordinator_mode=config.enable_coordinator_mode,
         driver_class=NoAltScreenDriver,
+        sandbox_config=config.sandbox,
     )
     app.run()
 
@@ -157,6 +158,9 @@ async def _run_prompt(config, permission_mode, hook_engine, prompt: str, output_
     work_dir = os.getcwd()
     home = Path.home()
 
+    sandbox_auto_allow = (
+        config.sandbox.enabled and config.sandbox.auto_allow
+    )
     checker = PermissionChecker(
         detector=DangerousCommandDetector(),
         sandbox=PathSandbox(work_dir),
@@ -168,10 +172,30 @@ async def _run_prompt(config, permission_mode, hook_engine, prompt: str, output_
             "permissions.local.yaml",
         ),
         mode=permission_mode,
+        sandbox_enabled=sandbox_auto_allow,
     )
 
     instructions = load_instructions(work_dir)
     registry = create_default_registry()
+
+    # 如果配置启用了沙箱，为 Bash 工具挂载 OS 沙箱
+    if config.sandbox.enabled:
+        from minicode.sandbox import SandboxConfig, create_sandbox
+        os_sandbox = create_sandbox()
+        if os_sandbox and os_sandbox.available():
+            sandbox_config = SandboxConfig(
+                allow_write=[work_dir, "/tmp"],
+                deny_write=[
+                    f"{work_dir}/.minicode/config.yaml",
+                    f"{work_dir}/.minicode/permissions.local.yaml",
+                ],
+                network_enabled=config.sandbox.network_enabled,
+            )
+            bash_tool = registry.get("Bash")
+            if bash_tool:
+                bash_tool.sandbox = os_sandbox
+                bash_tool.sandbox_config = sandbox_config
+
     registry.register(ToolSearchTool(registry, protocol=provider.protocol))
 
     agent = Agent(

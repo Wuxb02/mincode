@@ -3,10 +3,14 @@ from __future__ import annotations
 import asyncio
 import re
 import shlex
+from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, Field
 
 from minicode.tools.base import Tool, ToolResult
+
+if TYPE_CHECKING:
+    from minicode.sandbox import Sandbox, SandboxConfig
 
 MAX_TIMEOUT = 600
 
@@ -72,10 +76,36 @@ def _interpret_exit_code(command: str, exit_code: int) -> bool:
     return True
 
 
+# 特殊命令的退出码提示信息
+# 帮助 LLM 理解非零退出码的含义，而不是简单地标记为错误
+_EXIT_CODE_HINTS: dict[str, str] = {
+    "grep": "no matches found",
+    "egrep": "no matches found",
+    "fgrep": "no matches found",
+    "rg": "no matches found",
+    "diff": "files differ",
+    "find": "some directories were inaccessible",
+    "test": "condition is false",
+    "[": "condition is false",
+}
+
+
+def _exit_code_hint(command: str, exit_code: int) -> str:
+    """为非零退出码生成可读提示。
+
+    对于特殊命令（grep/diff/test 等），附加语义说明让 LLM 理解退出码含义。
+    普通命令只显示退出码数字。
+    """
+    cmd_name = _extract_last_command_name(command)
+    hint = _EXIT_CODE_HINTS.get(cmd_name, "") if cmd_name else ""
+    if hint:
+        return f"Exit code {exit_code} ({hint})"
+    return f"Exit code {exit_code}"
+
+
 class Params(BaseModel):
     command: str = Field(description="Shell command to execute")
-    timeout: int = Field(
-        default=120, description="Timeout in seconds (max 600)")
+    timeout: int = Field(default=120, description="Timeout in seconds (max 600)")
 
 
 class Bash(Tool):
@@ -84,20 +114,29 @@ class Bash(Tool):
     params_model = Params
     category = "command"
 
-    def __init__(self) -> None:
-        self.work_dir: str = "."
+    # 工作目录，为 None 时使用当前进程的工作目录
+    work_dir: str | None = None
+
+    # OS 级沙箱实例和配置（由外部注入，为 None 时不启用沙箱）
+    sandbox: Sandbox | None = None
+    sandbox_config: SandboxConfig | None = None
 
     async def execute(self, params: Params) -> ToolResult:
         timeout = min(params.timeout, MAX_TIMEOUT)
 
+        # 如果启用了 OS 沙箱，将命令包装为沙箱内执行
+        actual_command = params.command
+        if self.sandbox and self.sandbox_config and self.sandbox.available():
+            actual_command = self.sandbox.wrap(params.command, self.sandbox_config)
+
         try:
             proc = await asyncio.create_subprocess_shell(
-                params.command,
+                actual_command,
                 stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.STDOUT,  # 合并 stderr 到 stdout
                 cwd=self.work_dir,
             )
-            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
+            stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=timeout)
         except asyncio.TimeoutError:
             proc.kill()
             await proc.wait()
@@ -105,17 +144,20 @@ class Bash(Tool):
         except Exception as e:
             return ToolResult(output=f"Error executing command: {e}", is_error=True)
 
-        parts: list[str] = []
-        if stdout:
-            parts.append(f"STDOUT:\n{stdout.decode(errors='replace')}")
-        if stderr:
-            parts.append(f"STDERR:\n{stderr.decode(errors='replace')}")
-        if not parts:
-            parts.append("(no output)")
+        # 合并流输出，不再区分 stdout/stderr
+        output = stdout.decode(errors="replace") if stdout else ""
 
-        output = "\n".join(parts)
-        return ToolResult(
-            output=output,
-            is_error=_interpret_exit_code(
-                params.command, proc.returncode or 0),
-        )
+        # 非零退出码时追加退出码信息，但 is_error 始终为 False
+        # 只有超时和异常才设置 is_error=True
+        exit_code = proc.returncode or 0
+        if exit_code != 0:
+            hint = _exit_code_hint(params.command, exit_code)
+            if output:
+                output = f"{output.rstrip()}\n\n{hint}"
+            else:
+                output = hint
+
+        if not output:
+            output = "(no output)"
+
+        return ToolResult(output=output, is_error=False)

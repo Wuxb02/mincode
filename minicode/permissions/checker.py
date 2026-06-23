@@ -28,12 +28,15 @@ class PermissionChecker:
         sandbox: PathSandbox,
         rule_engine: RuleEngine,
         mode: PermissionMode = PermissionMode.DEFAULT,
+        sandbox_enabled: bool = False,
     ) -> None:
         self.detector = detector
         self.sandbox = sandbox
         self.rule_engine = rule_engine
         self.mode = mode
         self.plan_file_path: str = ""
+        # OS 级沙箱是否启用（开启后命令类工具可自动放行，因为内核会兜底）
+        self.sandbox_enabled = sandbox_enabled
         # Layer 4b: 会话级 allow-always 集合（内存中，不持久化）
         # 存放格式为 "ToolName:pattern"，用户选择 "don't ask again" 时记录
         self._session_allowed: set[str] = set()
@@ -94,6 +97,16 @@ class PermissionChecker:
             hit, reason = self.detector.detect(content)
             if hit:
                 return Decision(effect="deny", reason=f"危险命令拦截: {reason}")
+
+        # Layer 1c: OS 沙箱自动放行
+        # 沙箱开启时，命令类工具通过了危险命令检查后直接放行——
+        # 内核级隔离会阻止越权写入，无需再弹确认
+        if self.sandbox_enabled and tool.category == "command":
+            # 先检查显式 deny 规则，deny 规则不受沙箱影响
+            rule_result = self.rule_engine.evaluate(tool.name, content)
+            if rule_result == "deny":
+                return Decision(effect="deny", reason="权限规则拒绝")
+            return Decision(effect="allow", reason="OS 沙箱自动放行")
 
         # Layer 2: 路径沙箱（仅文件类工具）
         if tool.category in ("read", "write") and content:
